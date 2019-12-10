@@ -1,0 +1,10 @@
+version: '3'
+
+networks:
+  integration-tests:
+    driver: bridge
+
+services:
+  test-server:
+    build:
+      context: .

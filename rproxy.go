@@ -4,5 +4,27 @@
 
 package rproxy
 
-// Registration ..
-func Registration() {}
+import "os"
+
+/**
+==================       ==================
+=                =       =                =
+=                =       =                =
+=    PROVIDER    = ====> =     ROUTER     =
+=                =       =                =
+=                =       =                =
+==================       ==================
+*/
+
+// Proxer ..
+type Proxer interface {
+	Proxy()
+}
+
+// GetEnv ..
+func GetEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
