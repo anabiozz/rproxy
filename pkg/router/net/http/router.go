@@ -54,10 +54,10 @@ type httpHostMatch struct {
 	target  Target
 }
 
-func (m httpHostMatch) match(br *bufio.Reader) (Target, string) {
-	hh := httpHostHeader(br)
-	if m.matcher(context.TODO(), hh) {
-		return m.target, hh
+func (httphostmatch httpHostMatch) match(br *bufio.Reader) (Target, string) {
+	host := httpHostHeader(br)
+	if httphostmatch.matcher(context.TODO(), host) {
+		return httphostmatch.target, host
 	}
 	return nil, ""
 }
@@ -65,12 +65,13 @@ func (m httpHostMatch) match(br *bufio.Reader) (Target, string) {
 var (
 	lfHostColon = []byte("\nHost:")
 	lfhostColon = []byte("\nhost:")
-	crlf        = []byte("\r\n")
+	crlf        = []byte("\n")
 	lf          = []byte("\n")
-	crlfcrlf    = []byte("\r\n\r\n")
+	crlfcrlf    = []byte("\n\n")
 	lflf        = []byte("\n\n")
 )
 
+// return host header value
 func httpHostHeader(br *bufio.Reader) string {
 	const maxPeek = 4 << 10
 	peekSize := 0
@@ -107,10 +108,10 @@ func httpHostHeader(br *bufio.Reader) string {
 }
 
 type fixedTarget struct {
-	t Target
+	target Target
 }
 
-func (m fixedTarget) match(*bufio.Reader) (Target, string) { return m.t, "" }
+func (m fixedTarget) match(*bufio.Reader) (Target, string) { return m.target, "" }
 
 // Берем значение от Host: до переноса строки
 func httpHostHeaderFromBytes(b []byte) string {
@@ -138,6 +139,7 @@ type Conn struct {
 }
 
 func proxyCopy(errc chan<- error, dst, src net.Conn) {
+
 	if wc, ok := src.(*Conn); ok && len(wc.Peeked) > 0 {
 		if _, err := dst.Write(wc.Peeked); err != nil {
 			errc <- err
@@ -154,14 +156,14 @@ func proxyCopy(errc chan<- error, dst, src net.Conn) {
 }
 
 // UnderlyingConn ..
-func UnderlyingConn(c net.Conn) net.Conn {
-	if wrap, ok := c.(*Conn); ok {
+func UnderlyingConn(conn net.Conn) net.Conn {
+	if wrap, ok := conn.(*Conn); ok {
 		return wrap.Conn
 	}
-	return c
+	return conn
 }
 
-func goCloseConn(c net.Conn) { go c.Close() }
+func goCloseConn(conn net.Conn) { go conn.Close() }
 
 // Close ..
 func (proxy *Proxy) Close() error {
@@ -186,9 +188,9 @@ func (proxy *Proxy) AddHTTPHostMatchRoute(ipPort string, match Matcher, dest Tar
 	proxy.addRoute(ipPort, httpHostMatch{match, dest})
 }
 
-func (proxy *Proxy) addRoute(ipPort string, r route) {
+func (proxy *Proxy) addRoute(ipPort string, route route) {
 	cfg := proxy.configFor(ipPort)
-	cfg.routes = append(cfg.routes, r)
+	cfg.routes = append(cfg.routes, route)
 }
 
 func (proxy *Proxy) configFor(ipPort string) *routerConfig {
@@ -206,15 +208,18 @@ func (proxy *Proxy) Start() error {
 	if proxy.donec != nil {
 		return errors.New("already started")
 	}
+
 	proxy.donec = make(chan struct{})
 	errc := make(chan error, len(proxy.configs))
 	proxy.listeners = make([]net.Listener, 0, len(proxy.configs))
 	for ipPort, config := range proxy.configs {
+		fmt.Println("ipPort", ipPort)
 		listener, err := proxy.netListen()("tcp", ipPort)
 		if err != nil {
 			proxy.Close()
 			return err
 		}
+
 		proxy.listeners = append(proxy.listeners, listener)
 		go proxy.serveListener(errc, listener, config.routes)
 	}
@@ -227,37 +232,41 @@ func (proxy *Proxy) awaitFirstError(errc <-chan error) {
 	close(proxy.donec)
 }
 
-func (proxy *Proxy) serveListener(ret chan<- error, ln net.Listener, routes []route) {
+func (proxy *Proxy) serveListener(errc chan<- error, listener net.Listener, routes []route) {
 	for {
-		conn, err := ln.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			ret <- err
+			errc <- err
 			return
 		}
 		go proxy.serveConn(conn, routes)
 	}
 }
 
-func (proxy *Proxy) serveConn(c net.Conn, routes []route) bool {
-	br := bufio.NewReader(c)
+func (proxy *Proxy) serveConn(conn net.Conn, routes []route) bool {
+
+	br := bufio.NewReader(conn)
 	for _, route := range routes {
 		if target, hostName := route.match(br); target != nil {
+
 			fmt.Println("hostName", hostName)
-			fmt.Println("target", target)
+
 			if n := br.Buffered(); n > 0 {
 				peeked, _ := br.Peek(br.Buffered())
-				c = &Conn{
+				conn = &Conn{
 					HostName: hostName,
 					Peeked:   peeked,
-					Conn:     c,
+					Conn:     conn,
 				}
 			}
-			target.HandleConn(c)
+
+			target.HandleConn(conn)
 			return true
 		}
 	}
-	fmt.Printf("no routes matched conn %v/%v; closing", c.RemoteAddr().String(), c.LocalAddr().String())
-	c.Close()
+
+	fmt.Printf("no routes matched conn %v/%v; closing\n", conn.RemoteAddr().String(), conn.LocalAddr().String())
+	conn.Close()
 	return false
 }
 

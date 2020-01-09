@@ -5,10 +5,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -66,17 +67,17 @@ func newLocalListener() net.Listener {
 	return ln
 }
 
-var testFrontAddr = "127.0.0.1:7777"
+var testFrontAddr = ""
 
 func listenFunc(ln net.Listener) func(network, laddr string) (net.Listener, error) {
 	return func(network, laddr string) (net.Listener, error) {
 		if network != "tcp" {
-			fmt.Printf("got Listen call with network %q, not tcp", network)
+			fmt.Printf("got Listen call with network %q, not tcp\n", network)
 			return nil, errors.New("invalid network")
 		}
-		if laddr != testFrontAddr {
-			fmt.Printf("got Listen call with laddr %q, want %q", laddr, testFrontAddr)
-		}
+		// if laddr != testFrontAddr {
+		// 	fmt.Printf("got Listen call with laddr %q, want %q\n", laddr, testFrontAddr)
+		// }
 		return ln, nil
 	}
 }
@@ -121,49 +122,8 @@ func main() {
 		select {
 		case <-providerConfigurationCh:
 
-			// logger.Println("providerConfigurationCh", cfg)
+			router.Handle("/", generateProxy(ctx, config.Services, ""))
 
-			front := newLocalListener()
-			defer front.Close()
-
-			back := newLocalListener()
-			defer back.Close()
-
-			proxy := &httprouter.Proxy{}
-
-			// proxy.AddRoute(testFrontAddr, &httprouter.DialProxy{
-			// 	Addr:                 back.Addr().String(),
-			// 	ProxyProtocolVersion: 1,
-			// })
-
-			proxy.AddHTTPHostRoute(testFrontAddr, "127.0.0.1:9595", httprouter.To(back.Addr().String()))
-
-			if err := proxy.Start(); err != nil {
-				fmt.Println(err)
-			}
-
-			toFront, err := net.Dial("tcp", front.Addr().String())
-			if err != nil {
-				fmt.Println(err)
-			}
-			defer toFront.Close()
-
-			const msg = "GET / HTTP/1.1\r\nHost: 127.0.0.1:9595\r\n\r\n"
-			io.WriteString(toFront, msg)
-
-			fromProxy, err := back.Accept()
-			if err != nil {
-				fmt.Println(err)
-			}
-
-			buf := make([]byte, len(msg))
-			if _, err := io.ReadFull(fromProxy, buf); err != nil {
-				fmt.Println(err)
-			}
-
-			logger.Info(string(buf))
-
-			// router.Handle("/", httprouter.GenerateProxy(ctx, config.Services, providerName))
 		case err := <-errorCh:
 			logger.Error(err)
 		}
@@ -181,7 +141,7 @@ func main() {
 
 	go func() {
 		c := &controller{logger: logger}
-		logger.Info("TRANSPORT: 'HTTP', ADDR: '127.0.0.1::9090'")
+		logger.Info("TRANSPORT: 'HTTP', ADDR: '127.0.0.1:9090'")
 		server := &http.Server{
 			Handler:        (middlewares{c.logging}).apply(router),
 			Addr:           "127.0.0.1:9090",
@@ -194,6 +154,89 @@ func main() {
 	}()
 
 	logger.Info(<-errs)
+}
+
+func generateProxy(ctx context.Context, services map[string]config.Service, providerName string) http.Handler {
+	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+
+		ctxLog := log.NewContext(ctx, log.Str("function", "generateProxy"))
+		logger := log.WithContext(ctxLog)
+
+		front := newLocalListener()
+		defer front.Close()
+
+		proxy := &httprouter.Proxy{
+			ListenFunc: listenFunc(front),
+		}
+
+		urlDst := "127.0.0.1:9595"
+		urlDst2 := "127.0.0.1:9594"
+		urlProxy := "127.0.0.1:7777"
+		urlProxy2 := "127.0.0.1:7778"
+
+		proxy.AddHTTPHostRoute(urlProxy, urlProxy, httprouter.To(urlDst))
+		proxy.AddHTTPHostRoute(urlProxy2, urlProxy2, httprouter.To(urlDst2))
+
+		if err := proxy.Start(); err != nil {
+			logger.Error(err)
+		}
+
+		toProxy, err := net.Dial("tcp", front.Addr().String())
+		if err != nil {
+			logger.Error("Dial", err)
+		}
+
+		reqs := formatRequest(req)
+		reqs += "\n\n"
+		logger.Info("reqs ", reqs)
+
+		toProxy.Write([]byte(reqs))
+
+		defer toProxy.Close()
+
+		br := bufio.NewReader(toProxy)
+		resp, err := http.ReadResponse(br, req)
+		if err != nil {
+			logger.Error("ReadResponse ", err)
+		}
+
+		var body []byte
+		if resp != nil && resp.Body != nil {
+			body, err = ioutil.ReadAll(resp.Body)
+			if err != nil {
+				logger.Error("ReadAll ", err)
+			}
+		}
+
+		res.Write(body)
+	})
+}
+
+// formatRequest generates ascii representation of a request
+func formatRequest(r *http.Request) string {
+	// Create return string
+	var request []string
+	// Add the request string
+	url := fmt.Sprintf("%v %v %v", r.Method, r.URL, r.Proto)
+	request = append(request, url)
+	// Add the host
+	request = append(request, fmt.Sprintf("Host: %v", r.Host))
+	// Loop through headers
+	for name, headers := range r.Header {
+		name = strings.ToLower(name)
+		for _, h := range headers {
+			request = append(request, fmt.Sprintf("%v: %v", name, h))
+		}
+	}
+
+	// If this is a POST, add post data
+	if r.Method == "POST" {
+		r.ParseForm()
+		request = append(request, "\n")
+		request = append(request, r.Form.Encode())
+	}
+	// Return the request as a string
+	return strings.Join(request, "\n")
 }
 
 func createProviders(

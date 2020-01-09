@@ -20,32 +20,32 @@ type DialProxy struct {
 
 var defaultDialer = new(net.Dialer)
 
-func (dp *DialProxy) dialContext() func(ctx context.Context, network, address string) (net.Conn, error) {
-	if dp.DialContext != nil {
-		return dp.DialContext
+func (dialproxy *DialProxy) dialContext() func(ctx context.Context, network, address string) (net.Conn, error) {
+	if dialproxy.DialContext != nil {
+		return dialproxy.DialContext
 	}
 	return defaultDialer.DialContext
 }
 
-func (dp *DialProxy) onDialError() func(src net.Conn, dstDialErr error) {
-	if dp.OnDialError != nil {
-		return dp.OnDialError
+func (dialproxy *DialProxy) onDialError() func(src net.Conn, dstDialErr error) {
+	if dialproxy.OnDialError != nil {
+		return dialproxy.OnDialError
 	}
 	return func(src net.Conn, dstDialErr error) {
-		fmt.Printf("for incoming conn %v, error dialing %q: %v", src.RemoteAddr().String(), dp.Addr, dstDialErr)
+		fmt.Printf("for incoming conn %v, error dialing %q: %v\n", src.RemoteAddr().String(), dialproxy.Addr, dstDialErr)
 		src.Close()
 	}
 }
 
-func (dp *DialProxy) keepAlivePeriod() time.Duration {
-	if dp.KeepAlivePeriod != 0 {
-		return dp.KeepAlivePeriod
+func (dialproxy *DialProxy) keepAlivePeriod() time.Duration {
+	if dialproxy.KeepAlivePeriod != 0 {
+		return dialproxy.KeepAlivePeriod
 	}
 	return time.Minute
 }
 
-func (dp *DialProxy) sendProxyHeader(w io.Writer, src net.Conn) error {
-	switch dp.ProxyProtocolVersion {
+func (dialproxy *DialProxy) sendProxyHeader(w io.Writer, src net.Conn) error {
+	switch dialproxy.ProxyProtocolVersion {
 	case 0:
 		return nil
 	case 1:
@@ -69,34 +69,40 @@ func (dp *DialProxy) sendProxyHeader(w io.Writer, src net.Conn) error {
 		_, err := fmt.Fprintf(w, "PROXY %s %s %d %s %d\r\n", family, srcAddr.IP, srcAddr.Port, dstAddr.IP, dstAddr.Port)
 		return err
 	default:
-		return fmt.Errorf("PROXY protocol version %d not supported", dp.ProxyProtocolVersion)
+		return fmt.Errorf("proxy protocol version %d not supported", dialproxy.ProxyProtocolVersion)
 	}
 }
 
 // HandleConn ..
-func (dp *DialProxy) HandleConn(src net.Conn) {
+func (dialproxy *DialProxy) HandleConn(src net.Conn) {
+
 	ctx := context.Background()
+
 	var cancel context.CancelFunc
-	if dp.DialTimeout >= 0 {
-		ctx, cancel = context.WithTimeout(ctx, dp.dialTimeout())
+	if dialproxy.DialTimeout >= 0 {
+		ctx, cancel = context.WithTimeout(ctx, dialproxy.dialTimeout())
 	}
-	dst, err := dp.dialContext()(ctx, "tcp", dp.Addr)
+
+	dst, err := dialproxy.dialContext()(ctx, "tcp", dialproxy.Addr)
 	if cancel != nil {
 		cancel()
 	}
+
 	if err != nil {
-		dp.onDialError()(src, err)
+		dialproxy.onDialError()(src, err)
 		return
 	}
+
 	defer goCloseConn(dst)
 
-	if err = dp.sendProxyHeader(dst, src); err != nil {
-		dp.onDialError()(src, err)
+	if err = dialproxy.sendProxyHeader(dst, src); err != nil {
+		dialproxy.onDialError()(src, err)
 		return
 	}
+
 	defer goCloseConn(src)
 
-	if ka := dp.keepAlivePeriod(); ka > 0 {
+	if ka := dialproxy.keepAlivePeriod(); ka > 0 {
 		if c, ok := UnderlyingConn(src).(*net.TCPConn); ok {
 			c.SetKeepAlive(true)
 			c.SetKeepAlivePeriod(ka)
@@ -110,14 +116,15 @@ func (dp *DialProxy) HandleConn(src net.Conn) {
 	errc := make(chan error, 1)
 	go proxyCopy(errc, src, dst)
 	go proxyCopy(errc, dst, src)
+
 	<-errc
 }
 
-func (dp *DialProxy) dialTimeout() time.Duration {
-	if dp.DialTimeout > 0 {
-		return dp.DialTimeout
+func (dialproxy *DialProxy) dialTimeout() time.Duration {
+	if dialproxy.DialTimeout > 0 {
+		return dialproxy.DialTimeout
 	}
-	return 10 * time.Second
+	return 1 * time.Second
 }
 
 // To ..
