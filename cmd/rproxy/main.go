@@ -114,7 +114,7 @@ func main() {
 	providerConfigurationCh := make(chan configpkg.ProviderConfiguration, 100)
 	errorCh := make(chan error)
 	config.Services = make(map[string]configpkg.Service)
-	router := http.NewServeMux()
+	// router := http.NewServeMux()
 
 	go createProviders(ctx, cfg.Providers, providerConfigurationCh, logger)
 
@@ -122,7 +122,72 @@ func main() {
 		select {
 		case <-providerConfigurationCh:
 
-			router.Handle("/", generateProxy(ctx, config.Services, ""))
+			/**
+			TODO реализовать концепцию эндпоитов, например выставлять
+			порт 8080 и перенаправлять с него на нужный сервис/сы
+			в зависимости сколько поднято экземпляров сервиса
+
+			В контейнерах в лейблах описываем с какого url прокся перенаправляет трафик
+			на этот контейнер
+
+			"rpoxy.routers.container.rule=Host(`container.docker.localhost`)"
+
+			Если http запрос то можно в загаловке host присылать container.docker.localhost
+			*/
+
+			// router.Handle("/", generateProxy(ctx, config.Services, ""))
+			ctxLog := log.NewContext(ctx, log.Str("function", "generateProxy"))
+			logger := log.WithContext(ctxLog)
+
+			front := newLocalListener()
+			defer front.Close()
+
+			proxy := &httprouter.Proxy{
+				ListenFunc: listenFunc(front),
+			}
+
+			urlDst := "127.0.0.1:9595"
+			urlDst2 := "127.0.0.1:9594"
+			urlDst3 := "127.0.0.1:9593"
+			urlProxy := "127.0.0.1:7777"
+			urlProxy2 := "127.0.0.1:7778"
+
+			proxy.AddHTTPHostRoute(urlProxy, urlProxy, httprouter.To(urlDst))
+			proxy.AddHTTPHostRoute(urlProxy2, urlProxy2, httprouter.To(urlDst2))
+			proxy.AddRoute(urlProxy, httprouter.To(urlDst3))
+
+			if err := proxy.Start(); err != nil {
+				logger.Error(err)
+			}
+
+			toProxy, err := net.Dial("tcp", front.Addr().String())
+			if err != nil {
+				logger.Error("Dial", err)
+			}
+
+			reqs := formatRequest(req)
+			reqs += "\n\n"
+			logger.Info("reqs ", reqs)
+
+			toProxy.Write([]byte(reqs))
+
+			defer toProxy.Close()
+
+			br := bufio.NewReader(toProxy)
+			resp, err := http.ReadResponse(br, req)
+			if err != nil {
+				logger.Error("ReadResponse ", err)
+			}
+
+			var body []byte
+			if resp != nil && resp.Body != nil {
+				body, err = ioutil.ReadAll(resp.Body)
+				if err != nil {
+					logger.Error("ReadAll ", err)
+				}
+			}
+
+			res.Write(body)
 
 		case err := <-errorCh:
 			logger.Error(err)
@@ -140,10 +205,10 @@ func main() {
 	}()
 
 	go func() {
-		c := &controller{logger: logger}
+		// c := &controller{logger: logger}
 		logger.Info("TRANSPORT: 'HTTP', ADDR: '127.0.0.1:9090'")
 		server := &http.Server{
-			Handler:        (middlewares{c.logging}).apply(router),
+			// Handler:        (middlewares{c.logging}).apply(router),
 			Addr:           "127.0.0.1:9090",
 			ReadTimeout:    5 * time.Second,
 			WriteTimeout:   10 * time.Second,
@@ -171,11 +236,13 @@ func generateProxy(ctx context.Context, services map[string]config.Service, prov
 
 		urlDst := "127.0.0.1:9595"
 		urlDst2 := "127.0.0.1:9594"
+		urlDst3 := "127.0.0.1:9593"
 		urlProxy := "127.0.0.1:7777"
 		urlProxy2 := "127.0.0.1:7778"
 
 		proxy.AddHTTPHostRoute(urlProxy, urlProxy, httprouter.To(urlDst))
 		proxy.AddHTTPHostRoute(urlProxy2, urlProxy2, httprouter.To(urlDst2))
+		proxy.AddRoute(urlProxy, httprouter.To(urlDst3))
 
 		if err := proxy.Start(); err != nil {
 			logger.Error(err)

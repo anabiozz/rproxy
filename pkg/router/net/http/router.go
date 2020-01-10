@@ -42,6 +42,7 @@ type Target interface {
 // Matcher ..
 type Matcher func(ctx context.Context, hostname string) bool
 
+// Implemets Matcher interface
 func equals(want string) Matcher {
 	return func(_ context.Context, got string) bool {
 		return want == got
