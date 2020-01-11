@@ -9,12 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"time"
-
-	"github.com/anabiozz/rproxy/pkg/config"
-	"github.com/anabiozz/rproxy/pkg/log"
 )
 
 // Proxy ..
@@ -322,45 +316,45 @@ func loadBalance(network, serviceName, serviceVersion string) (net.Conn, error) 
 // 	return proxy
 // }
 
-// GenerateProxy ..
-func GenerateProxy(ctx context.Context, services map[string]config.Service, providerName string) http.Handler {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+// // GenerateProxy ..
+// func GenerateProxy(ctx context.Context, services map[string]config.Service, providerName string) http.Handler {
+// 	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
 
-		ctxLog := log.NewContext(ctx, log.Str("router", providerName))
-		logger := log.WithContext(ctxLog)
+// 		ctxLog := log.NewContext(ctx, log.Str("router", providerName))
+// 		logger := log.WithContext(ctxLog)
 
-		requestParam := req.URL.Query().Get("proxy")
-		service := services[requestParam]
+// 		requestParam := req.URL.Query().Get("proxy")
+// 		service := services[requestParam]
 
-		target, err := url.Parse(service.Host)
-		if err != nil {
-			logger.Error(err)
-			return
-		}
+// 		target, err := url.Parse(service.Host)
+// 		if err != nil {
+// 			logger.Error(err)
+// 			return
+// 		}
 
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		req.URL.Host = target.Host
-		req.URL.Scheme = target.Scheme
-		req.Header.Set("X-Forwarded-Host", req.Host)
-		req.Header.Set("X-Origin-Host", target.Host)
-		req.Host = target.Host
+// 		proxy := httputil.NewSingleHostReverseProxy(target)
+// 		req.URL.Host = target.Host
+// 		req.URL.Scheme = target.Scheme
+// 		req.Header.Set("X-Forwarded-Host", req.Host)
+// 		req.Header.Set("X-Origin-Host", target.Host)
+// 		req.Host = target.Host
 
-		proxy.Transport = &rProxyTransport{
-			logger: logger,
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				// Dial: func(network, addr string) (net.Conn, error) {
-				// 	addr = strings.Split(addr, ":")[0]
-				// 	tmp := strings.Split(addr, "/")
-				// 	if len(tmp) != 2 {
-				// 		return nil, ErrInvalidService
-				// 	}
-				// 	return loadBalance(network, tmp[0], tmp[1])
-				// },
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
-		}
+// 		proxy.Transport = &rProxyTransport{
+// 			logger: logger,
+// 			Transport: &http.Transport{
+// 				Proxy: http.ProxyFromEnvironment,
+// 				// Dial: func(network, addr string) (net.Conn, error) {
+// 				// 	addr = strings.Split(addr, ":")[0]
+// 				// 	tmp := strings.Split(addr, "/")
+// 				// 	if len(tmp) != 2 {
+// 				// 		return nil, ErrInvalidService
+// 				// 	}
+// 				// 	return loadBalance(network, tmp[0], tmp[1])
+// 				// },
+// 				TLSHandshakeTimeout: 10 * time.Second,
+// 			},
+// 		}
 
-		proxy.ServeHTTP(res, req)
-	})
-}
+// 		proxy.ServeHTTP(res, req)
+// 	})
+// }

@@ -13,7 +13,7 @@ type Provider struct {
 }
 
 // Provide ..
-func (p Provider) Provide(ctx context.Context, cfg chan config.ProviderConfiguration) (err error) {
+func (p Provider) Provide(ctx context.Context, cfg chan *config.ProviderConfiguration) (err error) {
 	return nil
 }
 

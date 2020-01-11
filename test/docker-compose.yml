@@ -1,0 +1,27 @@
+version: '3'
+
+services: 
+    httpserver-1:
+        build: 
+            context: $GOPATH/src/github.com/anabiozz/rproxy/test/httpserver
+            dockerfile: Dockerfile
+        image: "httpserver:latest"
+        container_name: "httpserver-1"
+        ports: 
+            - "9595:9595"
+    httpserver-2:
+        build: 
+            context: $GOPATH/src/github.com/anabiozz/rproxy/test/httpserver
+            dockerfile: Dockerfile
+        image: "httpserver:latest"
+        container_name: "httpserver-2"
+        ports: 
+            - "9594:9595"
+    tcpserver:
+        build:
+            context: $GOPATH/src/github.com/anabiozz/rproxy/test/tcpserver
+            dockerfile: Dockerfile
+        image: "tcpserver:latest"
+        container_name: "tcpserver"
+        ports: 
+            - "9593:9593"

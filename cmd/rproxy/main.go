@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -56,8 +55,8 @@ func (c *controller) logging(handler http.Handler) http.Handler {
 	})
 }
 
-func newLocalListener() net.Listener {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+func newProxyListener(url string) net.Listener {
+	ln, err := net.Listen("tcp", url)
 	if err != nil {
 		ln, err = net.Listen("tcp", "[::1]:0")
 		if err != nil {
@@ -111,83 +110,96 @@ func main() {
 
 	config := configpkg.ProviderConfiguration{}
 
-	providerConfigurationCh := make(chan configpkg.ProviderConfiguration, 100)
+	providerConfigurationCh := make(chan *configpkg.ProviderConfiguration, 100)
 	errorCh := make(chan error)
-	config.Services = make(map[string]configpkg.Service)
-	// router := http.NewServeMux()
+	config.Services = make(map[string]*configpkg.Service)
 
 	go createProviders(ctx, cfg.Providers, providerConfigurationCh, logger)
 
 	go func() {
 		select {
-		case <-providerConfigurationCh:
+		case cfg := <-providerConfigurationCh:
 
-			/**
-			TODO реализовать концепцию эндпоитов, например выставлять
-			порт 8080 и перенаправлять с него на нужный сервис/сы
-			в зависимости сколько поднято экземпляров сервиса
+			for serviceName, service := range cfg.Services {
+				logger.Info(service.Servers)
+				logger.Info(serviceName)
 
-			В контейнерах в лейблах описываем с какого url прокся перенаправляет трафик
-			на этот контейнер
+				for _, server := range service.Servers {
 
-			"rpoxy.routers.container.rule=Host(`container.docker.localhost`)"
+					/**
+					TODO реализовать концепцию эндпоитов, например выставлять
+					порт 8080 и перенаправлять с него на нужный сервис/сы
+					в зависимости сколько поднято экземпляров сервиса
 
-			Если http запрос то можно в загаловке host присылать container.docker.localhost
-			*/
+					В контейнерах в лейблах описываем с какого url прокся перенаправляет трафик
+					на этот контейнер
 
-			// router.Handle("/", generateProxy(ctx, config.Services, ""))
-			ctxLog := log.NewContext(ctx, log.Str("function", "generateProxy"))
-			logger := log.WithContext(ctxLog)
+					"rpoxy.routers.container.rule=Host(`container.docker.localhost`)"
 
-			front := newLocalListener()
-			defer front.Close()
+					Если http запрос то можно в загаловке host присылать container.docker.localhost
+					*/
 
-			proxy := &httprouter.Proxy{
-				ListenFunc: listenFunc(front),
-			}
+					ctxLog := log.NewContext(ctx, log.Str("function", "generateProxy"))
+					logger := log.WithContext(ctxLog)
 
-			urlDst := "127.0.0.1:9595"
-			urlDst2 := "127.0.0.1:9594"
-			urlDst3 := "127.0.0.1:9593"
-			urlProxy := "127.0.0.1:7777"
-			urlProxy2 := "127.0.0.1:7778"
+					front := newProxyListener(server.URL)
+					defer front.Close()
 
-			proxy.AddHTTPHostRoute(urlProxy, urlProxy, httprouter.To(urlDst))
-			proxy.AddHTTPHostRoute(urlProxy2, urlProxy2, httprouter.To(urlDst2))
-			proxy.AddRoute(urlProxy, httprouter.To(urlDst3))
+					proxy := &httprouter.Proxy{
+						ListenFunc: listenFunc(front),
+					}
 
-			if err := proxy.Start(); err != nil {
-				logger.Error(err)
-			}
+					urlDst := "127.0.0.1:9595"
+					urlDst2 := "127.0.0.1:9594"
 
-			toProxy, err := net.Dial("tcp", front.Addr().String())
-			if err != nil {
-				logger.Error("Dial", err)
-			}
+					urlDst3 := "127.0.0.1:9593"
+					urlProxy := "127.0.0.1:7777"
+					urlProxy2 := "127.0.0.1:7778"
 
-			reqs := formatRequest(req)
-			reqs += "\n\n"
-			logger.Info("reqs ", reqs)
+					proxy.AddHTTPHostRoute(urlProxy, urlProxy, httprouter.To(urlDst))
+					proxy.AddHTTPHostRoute(urlProxy2, urlProxy2, httprouter.To(urlDst2))
+					proxy.AddRoute(urlProxy, httprouter.To(urlDst3))
 
-			toProxy.Write([]byte(reqs))
+					if err := proxy.Start(); err != nil {
+						logger.Error(err)
+					}
 
-			defer toProxy.Close()
+					toProxy, err := net.Dial("tcp", front.Addr().String())
+					if err != nil {
+						logger.Error("Dial", err)
+					}
 
-			br := bufio.NewReader(toProxy)
-			resp, err := http.ReadResponse(br, req)
-			if err != nil {
-				logger.Error("ReadResponse ", err)
-			}
+					// accept connection on port
+					conn, _ := front.Accept()
 
-			var body []byte
-			if resp != nil && resp.Body != nil {
-				body, err = ioutil.ReadAll(resp.Body)
-				if err != nil {
-					logger.Error("ReadAll ", err)
+					// will listen for message to process ending in newline (\n)
+					message, _ := bufio.NewReader(conn).ReadString('\n')
+
+					// reqs := formatRequest(req)
+					// reqs += "\n\n"
+					// logger.Info("reqs ", reqs)
+
+					toProxy.Write([]byte(message))
+
+					defer toProxy.Close()
+
+					// br := bufio.NewReader(toProxy)
+					// resp, err := http.ReadResponse(br, req)
+					// if err != nil {
+					// 	logger.Error("ReadResponse ", err)
+					// }
+
+					// var body []byte
+					// if resp != nil && resp.Body != nil {
+					// 	body, err = ioutil.ReadAll(resp.Body)
+					// 	if err != nil {
+					// 		logger.Error("ReadAll ", err)
+					// 	}
+					// }
+
+					// res.Write(body)
 				}
 			}
-
-			res.Write(body)
 
 		case err := <-errorCh:
 			logger.Error(err)
@@ -221,75 +233,17 @@ func main() {
 	logger.Info(<-errs)
 }
 
-func generateProxy(ctx context.Context, services map[string]config.Service, providerName string) http.Handler {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-
-		ctxLog := log.NewContext(ctx, log.Str("function", "generateProxy"))
-		logger := log.WithContext(ctxLog)
-
-		front := newLocalListener()
-		defer front.Close()
-
-		proxy := &httprouter.Proxy{
-			ListenFunc: listenFunc(front),
-		}
-
-		urlDst := "127.0.0.1:9595"
-		urlDst2 := "127.0.0.1:9594"
-		urlDst3 := "127.0.0.1:9593"
-		urlProxy := "127.0.0.1:7777"
-		urlProxy2 := "127.0.0.1:7778"
-
-		proxy.AddHTTPHostRoute(urlProxy, urlProxy, httprouter.To(urlDst))
-		proxy.AddHTTPHostRoute(urlProxy2, urlProxy2, httprouter.To(urlDst2))
-		proxy.AddRoute(urlProxy, httprouter.To(urlDst3))
-
-		if err := proxy.Start(); err != nil {
-			logger.Error(err)
-		}
-
-		toProxy, err := net.Dial("tcp", front.Addr().String())
-		if err != nil {
-			logger.Error("Dial", err)
-		}
-
-		reqs := formatRequest(req)
-		reqs += "\n\n"
-		logger.Info("reqs ", reqs)
-
-		toProxy.Write([]byte(reqs))
-
-		defer toProxy.Close()
-
-		br := bufio.NewReader(toProxy)
-		resp, err := http.ReadResponse(br, req)
-		if err != nil {
-			logger.Error("ReadResponse ", err)
-		}
-
-		var body []byte
-		if resp != nil && resp.Body != nil {
-			body, err = ioutil.ReadAll(resp.Body)
-			if err != nil {
-				logger.Error("ReadAll ", err)
-			}
-		}
-
-		res.Write(body)
-	})
-}
-
 // formatRequest generates ascii representation of a request
-func formatRequest(r *http.Request) string {
+func formatRequest(req *http.Request) string {
 	// Create return string
 	var request []string
 	// Add the request string
-	url := fmt.Sprintf("%v %v %v", r.Method, r.URL, r.Proto)
+	url := fmt.Sprintf("%v %v %v", req.Method, req.URL, req.Proto)
 	request = append(request, url)
 	// Add the host
-	request = append(request, fmt.Sprintf("Host: %v", r.Host))
+	request = append(request, fmt.Sprintf("Host: %v", req.Host))
 	// Loop through headers
-	for name, headers := range r.Header {
+	for name, headers := range req.Header {
 		name = strings.ToLower(name)
 		for _, h := range headers {
 			request = append(request, fmt.Sprintf("%v: %v", name, h))
@@ -297,10 +251,10 @@ func formatRequest(r *http.Request) string {
 	}
 
 	// If this is a POST, add post data
-	if r.Method == "POST" {
-		r.ParseForm()
+	if req.Method == "POST" {
+		req.ParseForm()
 		request = append(request, "\n")
-		request = append(request, r.Form.Encode())
+		request = append(request, req.Form.Encode())
 	}
 	// Return the request as a string
 	return strings.Join(request, "\n")
@@ -309,7 +263,7 @@ func formatRequest(r *http.Request) string {
 func createProviders(
 	ctx context.Context,
 	providers map[string]map[string]interface{},
-	providerConfigurationCh chan configpkg.ProviderConfiguration,
+	providerConfigurationCh chan *configpkg.ProviderConfiguration,
 	logger log.Logger) {
 
 	for providerName, provider := range providers {

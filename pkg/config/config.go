@@ -12,12 +12,6 @@ type EntryPoints map[string]*EntryPoint
 // Providers ..
 type Providers map[string]map[string]interface{}
 
-// Providers contains providers configuration
-// type Providers struct {
-// 	Docker *docker.Provider `toml:"docker,omitempty" export:"true" label:"allowEmpty"`
-// 	File   *file.Provider   `toml:"file,omitempty" export:"true" label:"allowEmpty"`
-// }
-
 // EntryPoint holds the entry point configuration.
 type EntryPoint struct {
 	Address string `toml:"address,omitempty"`
@@ -26,22 +20,29 @@ type EntryPoint struct {
 	// 	ForwardedHeaders *ForwardedHeaders     `toml:"forwardedHeaders,omitempty"`
 }
 
-// ProviderConfiguration is the root of the dynamic configuration
+// ProviderConfiguration ..
 type ProviderConfiguration struct {
-	Routers  map[string]Router  `toml:"routers,omitempty"`
-	Services map[string]Service `toml:"services,omitempty"`
+	Routers  map[string]*Router
+	Services map[string]*Service
 }
 
-// Router holds the router configuration.
+// Router ..
 type Router struct {
-	Service  string `toml:"service,omitempty"`
-	Rule     string `toml:"rule,omitempty"`
-	Priority int    `toml:"priority,omitempty,omitzero"`
+	Service string
 }
 
 // Service ..
 type Service struct {
-	Name string
-	Path string
-	Host string
+	*LoadBalancer
+	EntryPoints
+}
+
+// LoadBalancer ..
+type LoadBalancer struct {
+	Servers []Server
+}
+
+// Server ..
+type Server struct {
+	URL string
 }

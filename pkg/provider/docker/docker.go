@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"text/template"
 
 	"github.com/anabiozz/rproxy/pkg/config"
@@ -19,21 +20,21 @@ import (
 
 // Provider ..
 type Provider struct {
-	Constraints      string
-	Watch            bool
-	Endpoint         string
-	DefaultRule      string
-	ExposedByDefault bool
-	UseBindPortIP    bool
-	SwarmMode        bool
-	Network          string
-	DetectionType    string `toml:"detectionType,omitempty"`
-	defaultRuleTpl   *template.Template
+	Constraints    string
+	Watch          bool
+	Endpoint       string
+	DefaultRule    string
+	UseBindPortIP  bool
+	SwarmMode      bool
+	Network        string
+	DetectionType  string `toml:"detectionType,omitempty"`
+	defaultRuleTpl *template.Template
 }
 
 type dockerData struct {
 	ID              string
 	ServiceName     string
+	Name            string
 	Labels          map[string]string
 	NetworkSettings networkSettings
 	isRunning       bool
@@ -67,11 +68,10 @@ func getNewDockerClient() (cli *client.Client, err error) {
 // Provide ..
 func (provider *Provider) Provide(
 	providerCtx context.Context,
-	providerConfigurationCh chan config.ProviderConfiguration) (err error) {
+	providerConfigurationCh chan *config.ProviderConfiguration) (err error) {
 
 	var providerConfiguration config.ProviderConfiguration
-	providerConfiguration.Services = make(map[string]config.Service)
-	// var service config.Service
+	providerConfiguration.Services = make(map[string]*config.Service)
 	var _dockerData dockerData
 	var _dockerDataArray []dockerData
 	var _networkData networkData
@@ -108,9 +108,14 @@ func (provider *Provider) Provide(
 
 	for _, container := range containers {
 
+		if container.Labels["rpoxy.routers.container.host"] == "" {
+			continue
+		}
+
 		_dockerData.ID = container.ID
 		_dockerData.Labels = container.Labels
-		_dockerData.ServiceName = container.Labels["com.docker.compose.service"]
+		_dockerData.Name = container.Labels["com.docker.compose.service"]
+		_dockerData.ServiceName = container.Labels["rpoxy.routers.container.host"]
 		if container.State == "Running" {
 			_dockerData.isRunning = true
 		}
@@ -125,6 +130,7 @@ func (provider *Provider) Provide(
 
 		for networkMode, networkSetting := range container.NetworkSettings.Networks {
 			_networkData.ID = networkSetting.NetworkID
+			_networkData.Name = networkMode
 			_networkSettings.NetworkMode = dockercontainertypes.NetworkMode(networkMode)
 			_networkSettings.Networks[networkMode] = _networkData
 		}
@@ -141,14 +147,44 @@ func (provider *Provider) Provide(
 
 func (provider Provider) buildConfiguration(
 	ctx context.Context,
-	dockerDataArray []dockerData) (providerConfiguration config.ProviderConfiguration) {
+	dockerDataArray []dockerData) (providerConfiguration *config.ProviderConfiguration) {
 
 	// cxtLog := log.NewContext(ctx, log.Str(log.ProviderName, "docker.buildConfiguration"))
 	// logger := log.WithContext(cxtLog)
 
-	// for _, _dockerData := range dockerDataArray {
-	// 	logger.Info(_dockerData)
-	// }
+	providerConfiguration = &config.ProviderConfiguration{}
+
+	providerConfiguration.Services = make(map[string]*config.Service)
+	providerConfiguration.Routers = make(map[string]*config.Router)
+
+	for _, _dockerData := range dockerDataArray {
+
+		_server := config.Server{}
+		_service := &config.Service{}
+		_router := &config.Router{}
+		_service.LoadBalancer = &config.LoadBalancer{}
+
+		_addr := _dockerData.NetworkSettings.Networks[string(_dockerData.NetworkSettings.NetworkMode)].Addr
+		_port := _dockerData.NetworkSettings.Networks[string(_dockerData.NetworkSettings.NetworkMode)].Port
+
+		_server.URL = "http://" + _addr + ":" + strconv.Itoa(_port)
+
+		_router.Service = _dockerData.ServiceName
+
+		if service, ok := providerConfiguration.Services[_dockerData.ServiceName]; ok {
+			service.LoadBalancer.Servers = append(service.LoadBalancer.Servers, _server)
+			_service = service
+		} else {
+			_service.LoadBalancer.Servers = append(_service.LoadBalancer.Servers, _server)
+		}
+
+		if _, ok := providerConfiguration.Routers[_dockerData.ServiceName]; ok {
+			continue
+		}
+
+		providerConfiguration.Services[_dockerData.ServiceName] = _service
+		providerConfiguration.Routers[_dockerData.ServiceName] = _router
+	}
 
 	return providerConfiguration
 }

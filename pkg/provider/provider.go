@@ -8,7 +8,7 @@ import (
 
 // Provider ...
 type Provider interface {
-	Provide(ctx context.Context, providerConfiguration chan config.ProviderConfiguration) error
+	Provide(ctx context.Context, providerConfiguration chan *config.ProviderConfiguration) error
 }
 
 // Creator ..
