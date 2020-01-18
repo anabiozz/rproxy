@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"text/template"
 
-	"github.com/anabiozz/rproxy/pkg/config"
+	"github.com/anabiozz/rproxy/pkg/config/dynamic"
 	"github.com/anabiozz/rproxy/pkg/log"
 	providerpkg "github.com/anabiozz/rproxy/pkg/provider"
 	"github.com/docker/docker/client"
@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types"
 	dockertypes "github.com/docker/docker/api/types"
 	dockercontainertypes "github.com/docker/docker/api/types/container"
+
 	"github.com/docker/docker/api/types/filters"
 )
 
@@ -22,12 +23,12 @@ import (
 type Provider struct {
 	Constraints    string
 	Watch          bool
-	Endpoint       string
+	Endpoint       string `toml:"endpoint,omitempty"`
 	DefaultRule    string
 	UseBindPortIP  bool
 	SwarmMode      bool
 	Network        string
-	DetectionType  string `toml:"detectionType,omitempty"`
+	DetectionType  string
 	defaultRuleTpl *template.Template
 }
 
@@ -68,10 +69,10 @@ func getNewDockerClient() (cli *client.Client, err error) {
 // Provide ..
 func (provider *Provider) Provide(
 	providerCtx context.Context,
-	providerConfigurationCh chan *config.ProviderConfiguration) (err error) {
+	providerConfigurationCh chan *dynamic.Configuration) (err error) {
 
-	var providerConfiguration config.ProviderConfiguration
-	providerConfiguration.Services = make(map[string]*config.Service)
+	var providerConfiguration dynamic.Configuration
+	providerConfiguration.Services = make(map[string]*dynamic.Service)
 	var _dockerData dockerData
 	var _dockerDataArray []dockerData
 	var _networkData networkData
@@ -79,6 +80,8 @@ func (provider *Provider) Provide(
 
 	ctxLog := log.NewContext(providerCtx, log.Str(log.ProviderName, "docker"))
 	logger := log.WithContext(ctxLog)
+
+	logger.Info(provider.Endpoint)
 
 	ctx, cancel := context.WithCancel(ctxLog)
 	defer cancel()
@@ -114,7 +117,7 @@ func (provider *Provider) Provide(
 
 		_dockerData.ID = container.ID
 		_dockerData.Labels = container.Labels
-		_dockerData.Name = container.Labels["com.docker.compose.service"]
+		_dockerData.Name = container.Labels["rpoxy.routers.container.host"]
 		_dockerData.ServiceName = container.Labels["rpoxy.routers.container.host"]
 		if container.State == "Running" {
 			_dockerData.isRunning = true
@@ -147,27 +150,27 @@ func (provider *Provider) Provide(
 
 func (provider Provider) buildConfiguration(
 	ctx context.Context,
-	dockerDataArray []dockerData) (providerConfiguration *config.ProviderConfiguration) {
+	dockerDataArray []dockerData) (providerConfiguration *dynamic.Configuration) {
 
 	// cxtLog := log.NewContext(ctx, log.Str(log.ProviderName, "docker.buildConfiguration"))
 	// logger := log.WithContext(cxtLog)
 
-	providerConfiguration = &config.ProviderConfiguration{}
+	providerConfiguration = &dynamic.Configuration{}
 
-	providerConfiguration.Services = make(map[string]*config.Service)
-	providerConfiguration.Routers = make(map[string]*config.Router)
+	providerConfiguration.Services = make(map[string]*dynamic.Service)
+	providerConfiguration.Routers = make(map[string]*dynamic.Router)
 
 	for _, _dockerData := range dockerDataArray {
 
-		_server := config.Server{}
-		_service := &config.Service{}
-		_router := &config.Router{}
-		_service.LoadBalancer = &config.LoadBalancer{}
+		_server := dynamic.Server{}
+		_service := &dynamic.Service{}
+		_router := &dynamic.Router{}
+		_service.LoadBalancer = &dynamic.LoadBalancer{}
 
 		_addr := _dockerData.NetworkSettings.Networks[string(_dockerData.NetworkSettings.NetworkMode)].Addr
 		_port := _dockerData.NetworkSettings.Networks[string(_dockerData.NetworkSettings.NetworkMode)].Port
 
-		_server.URL = "http://" + _addr + ":" + strconv.Itoa(_port)
+		_server.URL = _addr + ":" + strconv.Itoa(_port)
 
 		_router.Service = _dockerData.ServiceName
 

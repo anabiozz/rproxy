@@ -207,8 +207,9 @@ func (proxy *Proxy) Start() error {
 	proxy.donec = make(chan struct{})
 	errc := make(chan error, len(proxy.configs))
 	proxy.listeners = make([]net.Listener, 0, len(proxy.configs))
+
 	for ipPort, config := range proxy.configs {
-		fmt.Println("ipPort", ipPort)
+
 		listener, err := proxy.netListen()("tcp", ipPort)
 		if err != nil {
 			proxy.Close()
@@ -243,8 +244,6 @@ func (proxy *Proxy) serveConn(conn net.Conn, routes []route) bool {
 	br := bufio.NewReader(conn)
 	for _, route := range routes {
 		if target, hostName := route.match(br); target != nil {
-
-			fmt.Println("hostName", hostName)
 
 			if n := br.Buffered(); n > 0 {
 				peeked, _ := br.Peek(br.Buffered())

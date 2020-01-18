@@ -3,7 +3,7 @@ package file
 import (
 	"context"
 
-	"github.com/anabiozz/rproxy/pkg/config"
+	"github.com/anabiozz/rproxy/pkg/config/dynamic"
 	"github.com/anabiozz/rproxy/pkg/provider"
 )
 
@@ -13,7 +13,7 @@ type Provider struct {
 }
 
 // Provide ..
-func (p Provider) Provide(ctx context.Context, cfg chan *config.ProviderConfiguration) (err error) {
+func (p Provider) Provide(ctx context.Context, cfg chan *dynamic.Configuration) (err error) {
 	return nil
 }
 

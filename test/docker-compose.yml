@@ -6,7 +6,9 @@ services:
             context: $GOPATH/src/github.com/anabiozz/rproxy/test/httpserver
             dockerfile: Dockerfile
         image: "httpserver:latest"
-        container_name: "httpserver-1"
+        container_name: "httpserver_1"
+        labels: 
+            rpoxy.routers.container.host: "httpserver_1" 
         ports: 
             - "9595:9595"
     httpserver-2:
@@ -14,7 +16,9 @@ services:
             context: $GOPATH/src/github.com/anabiozz/rproxy/test/httpserver
             dockerfile: Dockerfile
         image: "httpserver:latest"
-        container_name: "httpserver-2"
+        container_name: "httpserver_2"
+        labels:
+            rpoxy.routers.container.host: "httpserver_2"
         ports: 
             - "9594:9595"
     tcpserver:
@@ -22,6 +26,8 @@ services:
             context: $GOPATH/src/github.com/anabiozz/rproxy/test/tcpserver
             dockerfile: Dockerfile
         image: "tcpserver:latest"
-        container_name: "tcpserver"
+        container_name: "tcpserver_1"
+        labels:
+            rpoxy.routers.container.host: "tcpserver_1"
         ports: 
             - "9593:9593"

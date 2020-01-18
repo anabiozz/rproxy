@@ -1,19 +1,28 @@
 [entryPoints]
-  [entryPoints.web]
-    address = ":80"
 
-  [entryPoints.websecure]
-    address = ":443"
+ [entryPoints.web]
+      address = ":80"
 
-  [entryPoints.service-1]
-    address = ":8080"
+    [entryPoints.websecure]
+      address = ":443"
 
-  [entryPoints.service-2]
-    address = ":8081"
+    [entryPoints.httpserver_1]
+      address = ":8888"
+
+    [entryPoints.httpserver_2]
+      address = ":8887"
+
+    [entryPoints.tcpserver_1]
+      address = ":8886"
 
 [providers]
-  [providers.docker]
-  endpoint = "unix:///var/run/docker.sock"
 
-  # Default: "Host(`{{ normalize .Name }}`)"
-  # defaultRule = "Host(`{{ normalize .Name }}.docker.localhost`)"
+  # DOCKER
+
+  [providers.docker]
+    endpoint = "unix:///var/run/docker.sock"
+
+  # FILE
+  
+  [providers.file]
+    endpoint = "unix:///var/run/docker.sock"

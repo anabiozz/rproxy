@@ -3,12 +3,12 @@ package provider
 import (
 	"context"
 
-	"github.com/anabiozz/rproxy/pkg/config"
+	"github.com/anabiozz/rproxy/pkg/config/dynamic"
 )
 
 // Provider ...
 type Provider interface {
-	Provide(ctx context.Context, providerConfiguration chan *config.ProviderConfiguration) error
+	Provide(ctx context.Context, providerConfiguration chan *dynamic.Configuration) error
 }
 
 // Creator ..

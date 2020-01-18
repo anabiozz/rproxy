@@ -31,7 +31,7 @@ func main() {
 		// represents the time until the full request header (send by a client) should be read
 		ReadHeaderTimeout: 20 * time.Second,
 		Handler:           h,
-		Addr:              "127.0.0.1:9595",
+		Addr:              "0.0.0.0:9595",
 	}
 
 	fmt.Println("server was up")

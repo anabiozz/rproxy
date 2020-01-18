@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anabiozz/rproxy/pkg/config"
+	"github.com/anabiozz/rproxy/pkg/config/dynamic"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 )
@@ -16,7 +16,7 @@ func TestDefaultRule(t *testing.T) {
 	testCases := []struct {
 		desc       string
 		containers []dockerData
-		expected   *config.ProviderConfiguration
+		expected   *dynamic.Configuration
 	}{
 		{
 			desc: "default container",
@@ -41,21 +41,16 @@ func TestDefaultRule(t *testing.T) {
 					},
 				},
 			},
-			expected: &config.ProviderConfiguration{
-				Routers: map[string]*config.Router{
+			expected: &dynamic.Configuration{
+				Routers: map[string]*dynamic.Router{
 					"Test": {
 						Service: "Test",
 					},
 				},
-				Services: map[string]*config.Service{
+				Services: map[string]*dynamic.Service{
 					"Test": {
-						EntryPoints: map[string]*config.EntryPoint{
-							"Test": {
-								Address: ":8080",
-							},
-						},
-						LoadBalancer: &config.LoadBalancer{
-							Servers: []config.Server{
+						LoadBalancer: &dynamic.LoadBalancer{
+							Servers: []dynamic.Server{
 								{
 									URL: "http://127.0.0.1:8080",
 								},
