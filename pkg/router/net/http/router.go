@@ -2,13 +2,15 @@ package http
 
 import (
 	"bufio"
-	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
+	"net/http/httptrace"
+	"time"
+
+	"github.com/anabiozz/rproxy/pkg/log"
 )
 
 // Proxy ..
@@ -30,100 +32,18 @@ type route interface {
 
 // Target ..
 type Target interface {
-	HandleConn(net.Conn)
+	HandleConn(context.Context, net.Conn)
 }
 
 // Matcher ..
 type Matcher func(ctx context.Context, hostname string) bool
 
-// Implemets Matcher interface
-func equals(want string) Matcher {
-	return func(_ context.Context, got string) bool {
-		return want == got
-	}
-}
-
-// Route that impliments route interface
-type httpHostMatch struct {
-	matcher Matcher
-	target  Target
-}
-
-func (httphostmatch httpHostMatch) match(br *bufio.Reader) (Target, string) {
-	host := httpHostHeader(br)
-	if httphostmatch.matcher(context.TODO(), host) {
-		return httphostmatch.target, host
-	}
-	return nil, ""
-}
-
-var (
-	lfHostColon = []byte("\nHost:")
-	lfhostColon = []byte("\nhost:")
-	crlf        = []byte("\n")
-	lf          = []byte("\n")
-	crlfcrlf    = []byte("\n\n")
-	lflf        = []byte("\n\n")
-)
-
-// return host header value
-func httpHostHeader(br *bufio.Reader) string {
-	const maxPeek = 4 << 10
-	peekSize := 0
-	for {
-		peekSize++
-		if peekSize > maxPeek {
-			b, _ := br.Peek(br.Buffered())
-			return httpHostHeaderFromBytes(b)
-		}
-		b, err := br.Peek(peekSize)
-		if n := br.Buffered(); n > peekSize {
-			b, _ = br.Peek(n)
-			peekSize = n
-		}
-		if len(b) > 0 {
-			if b[0] < 'A' || b[0] > 'Z' {
-				return ""
-			}
-			if bytes.Index(b, crlfcrlf) != -1 || bytes.Index(b, lflf) != -1 {
-				req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(b)))
-				if err != nil {
-					return ""
-				}
-				if len(req.Header["Host"]) > 1 {
-					return ""
-				}
-				return req.Host
-			}
-		}
-		if err != nil {
-			return httpHostHeaderFromBytes(b)
-		}
-	}
-}
-
 type fixedTarget struct {
 	target Target
 }
 
-func (m fixedTarget) match(*bufio.Reader) (Target, string) { return m.target, "" }
-
-// Берем значение от Host: до переноса строки
-func httpHostHeaderFromBytes(b []byte) string {
-	if i := bytes.Index(b, lfHostColon); i != -1 {
-		return string(bytes.TrimSpace(untilEOL(b[i+len(lfHostColon):])))
-	}
-	if i := bytes.Index(b, lfhostColon); i != -1 {
-		return string(bytes.TrimSpace(untilEOL(b[i+len(lfhostColon):])))
-	}
-	return ""
-}
-
-func untilEOL(v []byte) []byte {
-	if i := bytes.IndexByte(v, '\n'); i != -1 {
-		return v[:i]
-	}
-	return v
+func (m fixedTarget) match(*bufio.Reader) (Target, string) {
+	return m.target, ""
 }
 
 // Conn ..
@@ -133,34 +53,15 @@ type Conn struct {
 	net.Conn
 }
 
-func proxyCopy(errc chan<- error, dst, src net.Conn) {
-
-	if wc, ok := src.(*Conn); ok && len(wc.Peeked) > 0 {
-		if _, err := dst.Write(wc.Peeked); err != nil {
-			errc <- err
-			return
-		}
-		wc.Peeked = nil
-	}
-
-	src = UnderlyingConn(src)
-	dst = UnderlyingConn(dst)
-
-	_, err := io.Copy(dst, src)
-	errc <- err
-}
-
-// UnderlyingConn ..
+// UnderlyingConn returns underlying connection
 func UnderlyingConn(conn net.Conn) net.Conn {
-	if wrap, ok := conn.(*Conn); ok {
-		return wrap.Conn
+	if uc, ok := conn.(*Conn); ok {
+		return uc.Conn
 	}
 	return conn
 }
 
-func goCloseConn(conn net.Conn) { go conn.Close() }
-
-// Close ..
+// Close closes all listeners
 func (proxy *Proxy) Close() error {
 	for _, c := range proxy.listeners {
 		c.Close()
@@ -171,16 +72,6 @@ func (proxy *Proxy) Close() error {
 // AddRoute ..
 func (proxy *Proxy) AddRoute(ipPort string, dest Target) {
 	proxy.addRoute(ipPort, fixedTarget{dest})
-}
-
-// AddHTTPHostRoute ..
-func (proxy *Proxy) AddHTTPHostRoute(ipPort, httpHost string, dest Target) {
-	proxy.AddHTTPHostMatchRoute(ipPort, equals(httpHost), dest)
-}
-
-// AddHTTPHostMatchRoute ..
-func (proxy *Proxy) AddHTTPHostMatchRoute(ipPort string, match Matcher, dest Target) {
-	proxy.addRoute(ipPort, httpHostMatch{match, dest})
 }
 
 func (proxy *Proxy) addRoute(ipPort string, route route) {
@@ -199,7 +90,7 @@ func (proxy *Proxy) configFor(ipPort string) *routerConfig {
 }
 
 // Start ..
-func (proxy *Proxy) Start() error {
+func (proxy *Proxy) Start(ctx context.Context) error {
 	if proxy.donec != nil {
 		return errors.New("already started")
 	}
@@ -217,7 +108,8 @@ func (proxy *Proxy) Start() error {
 		}
 
 		proxy.listeners = append(proxy.listeners, listener)
-		go proxy.serveListener(errc, listener, config.routes)
+
+		go proxy.serveListener(ctx, errc, listener, config.routes)
 	}
 	go proxy.awaitFirstError(errc)
 	return nil
@@ -228,25 +120,74 @@ func (proxy *Proxy) awaitFirstError(errc <-chan error) {
 	close(proxy.donec)
 }
 
-func (proxy *Proxy) serveListener(errc chan<- error, listener net.Listener, routes []route) {
+func (proxy *Proxy) serveListener(ctx context.Context, errc chan<- error, listener net.Listener, routes []route) {
+
+	ctxLog := log.NewContext(ctx, log.Str("function", "serveListener"))
+	logger := log.WithContext(ctxLog)
+
+	var start, connect, dns, tlsHandshake time.Time
+
+	start = time.Now()
+
+	trace := &httptrace.ClientTrace{
+		DNSStart: func(dsi httptrace.DNSStartInfo) { dns = time.Now() },
+		DNSDone: func(ddi httptrace.DNSDoneInfo) {
+			logger.Infof("DNS DONE: %v\n", time.Since(dns))
+		},
+
+		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
+		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
+			logger.Infof("TLS HANDSHAKE: %v\n", time.Since(tlsHandshake))
+		},
+
+		ConnectStart: func(network, addr string) { connect = time.Now() },
+		ConnectDone: func(network, addr string, err error) {
+			logger.Infof("CONNECT TIME: %v\n", time.Since(connect))
+		},
+
+		GotFirstResponseByte: func() {
+			logger.Infof("TIME FROM START TO FIRST BYTE: %v\n", time.Since(start))
+		},
+
+		WroteHeaderField: func(key string, value []string) {
+			logger.Infof("WROTE HEADER FIELDS: %s, %v\n", key, value)
+		},
+
+		WroteHeaders: func() {
+			logger.Infof("WROTE HEADERS: %v\n", time.Since(connect))
+		},
+
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			logger.Infof("WROTE REQUEST INFO: %v\n", info)
+		},
+	}
+
+	ctx = httptrace.WithClientTrace(ctx, trace)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			errc <- err
 			return
 		}
-		go proxy.serveConn(conn, routes)
+
+		go proxy.serveConn(ctx, conn, routes)
 	}
 }
 
-func (proxy *Proxy) serveConn(conn net.Conn, routes []route) bool {
+func (proxy *Proxy) serveConn(ctx context.Context, conn net.Conn, routes []route) {
 
-	br := bufio.NewReader(conn)
+	bufreader := bufio.NewReader(conn)
+
 	for _, route := range routes {
-		if target, hostName := route.match(br); target != nil {
+		if target, hostName := route.match(bufreader); target != nil {
 
-			if n := br.Buffered(); n > 0 {
-				peeked, _ := br.Peek(br.Buffered())
+			if n := bufreader.Buffered(); n > 0 {
+				peeked, err := bufreader.Peek(bufreader.Buffered())
+				if err != nil {
+					fmt.Println(err)
+				}
+
 				conn = &Conn{
 					HostName: hostName,
 					Peeked:   peeked,
@@ -254,14 +195,14 @@ func (proxy *Proxy) serveConn(conn net.Conn, routes []route) bool {
 				}
 			}
 
-			target.HandleConn(conn)
-			return true
+			target.HandleConn(ctx, conn)
+			return
 		}
 	}
 
 	fmt.Printf("no routes matched conn %v/%v; closing\n", conn.RemoteAddr().String(), conn.LocalAddr().String())
 	conn.Close()
-	return false
+	return
 }
 
 // if ListenFunc not chosen, net.Listen will be return
@@ -280,80 +221,3 @@ var (
 func loadBalance(network, serviceName, serviceVersion string) (net.Conn, error) {
 	return nil, nil
 }
-
-// GenerateProxy ..
-// func GenerateProxy(ctx context.Context, conf config.ProviderConfiguration) http.Handler {
-
-// 	ctxLog := log.NewContext(ctx, log.Str("router", conf.Name))
-// 	logger := log.WithContext(ctxLog)
-
-// 	proxy := &httputil.ReverseProxy{Director: func(req *http.Request) {
-
-// 		// requestParam := req.URL.Query().Get("proxy")
-
-// 		target, err := url.Parse(conf.Host)
-// 		if err != nil {
-// 			logger.Error(err)
-// 			return
-// 		}
-
-// 		req.URL.Host = target.Host
-// 		req.URL.Scheme = target.Scheme
-// 		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
-// 		req.Header.Set("X-Origin-Host", target.Host)
-// 		req.Host = target.Host
-
-// 	}, Transport: &http.Transport{
-// 		Dial: (&net.Dialer{
-// 			Timeout: 5 * time.Second,
-// 		}).Dial,
-// 	},
-// 	}
-
-// 	logger.Info("Router was UP")
-
-// 	return proxy
-// }
-
-// // GenerateProxy ..
-// func GenerateProxy(ctx context.Context, services map[string]config.Service, providerName string) http.Handler {
-// 	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-
-// 		ctxLog := log.NewContext(ctx, log.Str("router", providerName))
-// 		logger := log.WithContext(ctxLog)
-
-// 		requestParam := req.URL.Query().Get("proxy")
-// 		service := services[requestParam]
-
-// 		target, err := url.Parse(service.Host)
-// 		if err != nil {
-// 			logger.Error(err)
-// 			return
-// 		}
-
-// 		proxy := httputil.NewSingleHostReverseProxy(target)
-// 		req.URL.Host = target.Host
-// 		req.URL.Scheme = target.Scheme
-// 		req.Header.Set("X-Forwarded-Host", req.Host)
-// 		req.Header.Set("X-Origin-Host", target.Host)
-// 		req.Host = target.Host
-
-// 		proxy.Transport = &rProxyTransport{
-// 			logger: logger,
-// 			Transport: &http.Transport{
-// 				Proxy: http.ProxyFromEnvironment,
-// 				// Dial: func(network, addr string) (net.Conn, error) {
-// 				// 	addr = strings.Split(addr, ":")[0]
-// 				// 	tmp := strings.Split(addr, "/")
-// 				// 	if len(tmp) != 2 {
-// 				// 		return nil, ErrInvalidService
-// 				// 	}
-// 				// 	return loadBalance(network, tmp[0], tmp[1])
-// 				// },
-// 				TLSHandshakeTimeout: 10 * time.Second,
-// 			},
-// 		}
-
-// 		proxy.ServeHTTP(res, req)
-// 	})
-// }

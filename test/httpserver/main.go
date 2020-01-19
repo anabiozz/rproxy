@@ -25,7 +25,7 @@ func main() {
 
 	server := &http.Server{
 		// defines how long you allow a connection to be open during a client sends data
-		ReadTimeout: 10 * time.Second,
+		ReadTimeout: 30 * time.Second,
 		// it is in the other direction
 		WriteTimeout: 10 * time.Second,
 		// represents the time until the full request header (send by a client) should be read

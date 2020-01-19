@@ -1,14 +1,16 @@
 package main
 
-import "net"
-import "fmt"
-import "bufio"
-import "os"
+import (
+	"bufio"
+	"fmt"
+	"net"
+	"os"
+)
 
 func main() {
 
 	// connect to this socket
-	conn, _ := net.Dial("tcp", "127.0.0.1:7777")
+	conn, _ := net.Dial("tcp", "0.0.0.0:9593")
 	for {
 		// read in input from stdin
 		reader := bufio.NewReader(os.Stdin)

@@ -5,7 +5,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -56,13 +54,19 @@ func (c *controller) logging(handler http.Handler) http.Handler {
 	})
 }
 
-func newProxyListener(url string) net.Listener {
-	ln, err := net.Listen("tcp", url)
+func newProxyListener(url string, logger log.Logger) net.Listener {
+
+	addr, err := net.ResolveTCPAddr("tcp", url)
 	if err != nil {
-		fmt.Println(err)
-		ln, err = net.Listen("tcp", "[::1]:0")
+		logger.Error(err)
+	}
+
+	ln, err := net.Listen("tcp4", addr.String())
+	if err != nil {
+		logger.Error(err)
+		ln, err = net.Listen("tcp6", addr.String())
 		if err != nil {
-			fmt.Println(err)
+			logger.Error(err)
 		}
 	}
 	return ln
@@ -103,14 +107,14 @@ func createProviders(
 		if err != nil {
 			logger.Error(err)
 		}
-
 	}
 }
 
 func main() {
 
 	ctx := context.Background()
-	logger := log.WithContext(ctx)
+	ctxLog := log.NewContext(ctx, log.Str("function", "main"))
+	logger := log.WithContext(ctxLog)
 
 	// ################################################################
 	// # Config
@@ -142,7 +146,7 @@ func main() {
 
 	go createProviders(ctx, cfg.Providers, providerConfigurationCh, logger)
 
-	go func() {
+	go func(ctx context.Context, logger log.Logger) {
 		select {
 		case providercfg := <-providerConfigurationCh:
 
@@ -150,59 +154,36 @@ func main() {
 
 				for _, server := range service.Servers {
 
-					go func(server dynamic.Server, serviceName string) {
+					go func(server dynamic.Server, serviceName string, logger log.Logger) {
 
 						endpoint := (*cfg.EntryPoints)[serviceName]
 
-						ctxLog := log.NewContext(ctx, log.Str("function", "generateProxy"))
-						logger := log.WithContext(ctxLog)
-
-						front := newProxyListener(endpoint.Address)
+						front := newProxyListener(endpoint.Address, logger)
 						defer front.Close()
 
 						proxy := &httprouter.Proxy{
 							ListenFunc: listenFunc(front),
 						}
 
-						// proxy.AddHTTPHostRoute(endpoint.Address, httpserver1, httprouter.To(server.URL))
-						// proxy.AddHTTPHostRoute(endpoint.Address, httpserver2, httprouter.To(server.URL))
-						proxy.AddRoute(endpoint.Address, httprouter.To(server.URL))
+						proxy.AddRoute(endpoint.Address, &httprouter.DialProxy{
+							Addr: server.URL,
+						})
 
-						if err := proxy.Start(); err != nil {
+						if err := proxy.Start(ctx); err != nil {
 							logger.Error(err)
 						}
 
-						toProxy, err := net.Dial("tcp", front.Addr().String())
-						if err != nil {
-							logger.Error("Dial", err)
-						}
-
 						for {
-							// accept connection on port
-							conn, err := front.Accept()
-							if err != nil {
-								logger.Error("Accept", err)
-							}
-
-							// will listen for message to process ending in newline (\n)
-							message, err := bufio.NewReader(conn).ReadString('\n')
-							if err != nil {
-								logger.Error("ReadString", err)
-							}
-
-							toProxy.Write([]byte(message))
-
-							toProxy.Close()
 						}
 
-					}(server, serviceName)
+					}(server, serviceName, logger)
 				}
 			}
 
 		case err := <-errorCh:
 			logger.Error(err)
 		}
-	}()
+	}(ctx, logger)
 
 	logger.Info("SERVICE STARTED")
 	defer logger.Info("SERVICE ENDED")
@@ -220,7 +201,7 @@ func main() {
 		server := &http.Server{
 			// Handler:        (middlewares{c.logging}).apply(router),
 			Addr:           "127.0.0.1:9090",
-			ReadTimeout:    5 * time.Second,
+			ReadTimeout:    10 * time.Second,
 			WriteTimeout:   10 * time.Second,
 			IdleTimeout:    20 * time.Second,
 			MaxHeaderBytes: 1 << 20,
@@ -229,31 +210,4 @@ func main() {
 	}()
 
 	logger.Info(<-errs)
-}
-
-// formatRequest generates ascii representation of a request
-func formatRequest(req *http.Request) string {
-	// Create return string
-	var request []string
-	// Add the request string
-	url := fmt.Sprintf("%v %v %v", req.Method, req.URL, req.Proto)
-	request = append(request, url)
-	// Add the host
-	request = append(request, fmt.Sprintf("Host: %v", req.Host))
-	// Loop through headers
-	for name, headers := range req.Header {
-		name = strings.ToLower(name)
-		for _, h := range headers {
-			request = append(request, fmt.Sprintf("%v: %v", name, h))
-		}
-	}
-
-	// If this is a POST, add post data
-	if req.Method == "POST" {
-		req.ParseForm()
-		request = append(request, "\n")
-		request = append(request, req.Form.Encode())
-	}
-	// Return the request as a string
-	return strings.Join(request, "\n")
 }

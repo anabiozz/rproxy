@@ -1,81 +1,14 @@
 package http
 
 import (
-	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
-	"strings"
 	"testing"
 )
-
-type noopTarget struct{}
-
-func (noopTarget) HandleConn(net.Conn) {}
-
-func TestMatchHTTPHost(t *testing.T) {
-	tests := []struct {
-		name string
-		r    io.Reader
-		host string
-		want bool
-	}{
-		{
-			name: "match",
-			r:    strings.NewReader("GET / HTTP/1.1\r\nHost: foo.com\r\n\r\n"),
-			host: "foo.com",
-			want: true,
-		},
-		{
-			name: "no-match",
-			r:    strings.NewReader("GET / HTTP/1.1\r\nHost: foo.com\r\n\r\n"),
-			host: "bar.com",
-			want: false,
-		},
-		{
-			name: "match-huge-request",
-			r:    io.MultiReader(strings.NewReader("GET / HTTP/1.1\r\nHost: foo.com\r\n"), neverEnding('a')),
-			host: "foo.com",
-			want: true,
-		},
-	}
-	for i, tt := range tests {
-		name := tt.name
-		if name == "" {
-			name = fmt.Sprintf("test_index_%d", i)
-		}
-		t.Run(name, func(t *testing.T) {
-			br := bufio.NewReader(tt.r)
-			r := httpHostMatch{equals(tt.host), noopTarget{}}
-			m, name := r.match(br)
-			got := m != nil
-			if got != tt.want {
-				t.Fatalf("match = %v; want %v", got, tt.want)
-			}
-			if tt.want && name != tt.host {
-				t.Fatalf("host = %s; want %s", name, tt.host)
-			}
-			get := make([]byte, 3)
-			if _, err := io.ReadFull(br, get); err != nil {
-				t.Fatal(err)
-			}
-			if string(get) != "GET" {
-				t.Fatalf("did bufio.Reader consume bytes? got %q; want GET", get)
-			}
-		})
-	}
-}
-
-type neverEnding byte
-
-func (b neverEnding) Read(p []byte) (n int, err error) {
-	for i := range p {
-		p[i] = byte(b)
-	}
-	return len(p), nil
-}
 
 func newLocalListener(t *testing.T) net.Listener {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -109,45 +42,6 @@ func testProxy(t *testing.T, front net.Listener) *Proxy {
 	}
 }
 
-func TestProxyHTTP(t *testing.T) {
-	front := newLocalListener(t)
-	defer front.Close()
-
-	backFoo := newLocalListener(t)
-	defer backFoo.Close()
-	backBar := newLocalListener(t)
-	defer backBar.Close()
-
-	p := testProxy(t, front)
-	p.AddHTTPHostRoute(testFrontAddr, "127.0.0.1:9595", To(backFoo.Addr().String()))
-	p.AddHTTPHostRoute(testFrontAddr, "bar.com", To(backBar.Addr().String()))
-	if err := p.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	toFront, err := net.Dial("tcp", front.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer toFront.Close()
-
-	const msg = "GET / HTTP/1.1\r\nHost: 127.0.0.1:9595\r\n\r\n"
-	io.WriteString(toFront, msg)
-
-	fromProxy, err := backFoo.Accept()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	buf := make([]byte, len(msg))
-	if _, err := io.ReadFull(fromProxy, buf); err != nil {
-		t.Fatal(err)
-	}
-	if string(buf) != msg {
-		t.Fatalf("got %q; want %q", buf, msg)
-	}
-}
-
 func TestProxyPROXYOut(t *testing.T) {
 	front := newLocalListener(t)
 	defer front.Close()
@@ -156,10 +50,9 @@ func TestProxyPROXYOut(t *testing.T) {
 
 	proxy := testProxy(t, front)
 	proxy.AddRoute(testFrontAddr, &DialProxy{
-		Addr:                 back.Addr().String(),
-		ProxyProtocolVersion: 1,
+		Addr: back.Addr().String(),
 	})
-	if err := proxy.Start(); err != nil {
+	if err := proxy.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,7 +88,7 @@ func TestProxyAlwaysMatch(t *testing.T) {
 
 	p := testProxy(t, front)
 	p.AddRoute(testFrontAddr, To(back.Addr().String()))
-	if err := p.Start(); err != nil {
+	if err := p.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
