@@ -22,37 +22,9 @@ import (
 	_ "github.com/anabiozz/rproxy/pkg/provider/all"
 	"github.com/anabiozz/rproxy/pkg/provider/docker"
 	"github.com/anabiozz/rproxy/pkg/provider/file"
-	httprouter "github.com/anabiozz/rproxy/pkg/router/net/http"
+	httprouter "github.com/anabiozz/rproxy/pkg/router/net"
 	"github.com/spf13/viper"
 )
-
-type middleware func(http.Handler) http.Handler
-type middlewares []middleware
-
-type controller struct {
-	logger log.Logger
-}
-
-func (mws middlewares) apply(handler http.Handler) http.Handler {
-	if len(mws) == 0 {
-		return handler
-	}
-	return mws[1:].apply(mws[0](handler))
-}
-
-func (c *controller) logging(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		defer func(start time.Time) {
-			requestID := w.Header().Get("X-Request-Time")
-			if requestID == "" {
-				requestID = "unknown"
-			}
-			c.logger.Infof("PROXY: %s | TARGET: %s | SOURCE: %s | PATH: %s | METHOD: %s | USER AGENT: %s | TIME ELAPSED: %v",
-				req.URL.Query().Get("proxy"), req.Header.Get("X-Origin-Host"), req.RemoteAddr, req.URL.Path, req.Method, req.UserAgent(), time.Since(start))
-		}(time.Now())
-		handler.ServeHTTP(w, req)
-	})
-}
 
 func newProxyListener(url string, logger log.Logger) net.Listener {
 
@@ -196,10 +168,8 @@ func main() {
 	}()
 
 	go func() {
-		// c := &controller{logger: logger}
 		logger.Info("TRANSPORT: 'HTTP', ADDR: '127.0.0.1:9090'")
 		server := &http.Server{
-			// Handler:        (middlewares{c.logging}).apply(router),
 			Addr:           "127.0.0.1:9090",
 			ReadTimeout:    10 * time.Second,
 			WriteTimeout:   10 * time.Second,

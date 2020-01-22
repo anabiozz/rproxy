@@ -4,16 +4,33 @@ import (
 	"context"
 
 	"github.com/anabiozz/rproxy/pkg/config/dynamic"
+	"github.com/anabiozz/rproxy/pkg/log"
 	"github.com/anabiozz/rproxy/pkg/provider"
 )
 
 // Provider ..
 type Provider struct {
-	File string
+	File      string
+	Endpoints []*Endpoint
+}
+
+// Endpoint ..
+type Endpoint struct {
+	Name       string `toml:"name"`
+	Localaddr  string `toml:"localaddr"`
+	Remoteaddr string `toml:"remoteaddr"`
 }
 
 // Provide ..
-func (p Provider) Provide(ctx context.Context, cfg chan *dynamic.Configuration) (err error) {
+func (p *Provider) Provide(providerCtx context.Context, cfg chan *dynamic.Configuration) (err error) {
+
+	ctxLog := log.NewContext(providerCtx, log.Str(log.ProviderName, "file"))
+	logger := log.WithContext(ctxLog)
+
+	for _, endpoint := range p.Endpoints {
+		logger.Info(endpoint)
+	}
+
 	return nil
 }
 

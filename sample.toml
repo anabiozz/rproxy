@@ -25,4 +25,17 @@
   # FILE
   
   [providers.file]
-    endpoint = "unix:///var/run/docker.sock"
+    [[providers.file.endpoints]]
+    name = "httpserver_1"
+    localaddr = ":7777"
+    remoteaddr = ":9595"
+
+    [[providers.file.endpoints]]
+    name = "httpserver_2"
+    localaddr = "7776"
+    remoteaddr = "9594"
+
+    [[providers.file.endpoints]]
+    name = "tcpserver_1"
+    localaddr = "7775"
+    remoteaddr = "9593"
